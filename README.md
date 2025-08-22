@@ -140,7 +140,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 &nbsp;
 
 ## Meet the Author
-<img  src="public/author.jpg" alt="Author">
+<img  src="public/Author.jpg" alt="Author">
 
 ### Contact 
 - Email: rs4101976@gmail.com
