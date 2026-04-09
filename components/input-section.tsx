@@ -3,12 +3,12 @@
 import type React from "react"
 
 import { useCallback } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Upload, FileText, AlertCircle, Loader2, Type, Info } from "lucide-react"
+import { Upload, FileText, Loader2, Type } from "lucide-react"
 
 interface ParsedData {
   headers: string[]
@@ -64,55 +64,45 @@ export function InputSection({
   }, [])
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2">
-          <Upload className="h-5 w-5" />
-          Input GitHub Usernames
+    <Card className="border-border/60">
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base font-semibold">
+          <Upload className="h-4 w-4 text-muted-foreground" />
+          Input Usernames
         </CardTitle>
-        <CardDescription>
-          Upload files or enter usernames manually. GitHub usernames will be auto-detected and processed.
-        </CardDescription>
-        <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3 rounded-lg">
-          <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200">
-            <Info className="h-4 w-4" />
-            <span className="text-sm font-medium">Processing Limit</span>
-          </div>
-          <p className="text-xs text-amber-700 dark:text-amber-300 mt-1">
-            Maximum of <strong>5,000 GitHub usernames</strong> can be validated at a time. Larger datasets will need to
-            be split into multiple batches.
-          </p>
-        </div>
+        <p className="text-xs text-muted-foreground leading-relaxed">
+          Upload a file or paste usernames manually. Limit: <strong className="text-foreground">5,000</strong> per batch.
+        </p>
       </CardHeader>
       <CardContent>
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="upload" className="flex items-center gap-2">
-              <FileText className="h-4 w-4" />
+          <TabsList className="grid w-full grid-cols-2 h-9">
+            <TabsTrigger value="upload" className="flex items-center gap-1.5 text-xs">
+              <FileText className="h-3.5 w-3.5" />
               Upload File
             </TabsTrigger>
-            <TabsTrigger value="manual" className="flex items-center gap-2">
-              <Type className="h-4 w-4" />
+            <TabsTrigger value="manual" className="flex items-center gap-1.5 text-xs">
+              <Type className="h-3.5 w-3.5" />
               Manual Input
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="upload" className="space-y-4 mt-4">
             <div
-              className="border-2 border-dashed border-border rounded-lg p-8 text-center hover:border-primary/50 transition-colors cursor-pointer"
+              className="rounded-lg border-2 border-dashed border-border/60 bg-muted/20 p-8 text-center transition-colors hover:border-foreground/20 hover:bg-muted/40 cursor-pointer"
               onDrop={handleDrop}
               onDragOver={handleDragOver}
               onClick={() => document.getElementById("file-input")?.click()}
             >
               {isUploadingFile ? (
-                <Loader2 className="h-12 w-12 text-primary mx-auto mb-4 animate-spin" />
+                <Loader2 className="h-8 w-8 text-muted-foreground mx-auto mb-3 animate-spin" />
               ) : (
-                <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <Upload className="h-8 w-8 text-muted-foreground/60 mx-auto mb-3" />
               )}
-              <p className="text-lg font-medium text-foreground mb-2">
-                {isUploadingFile ? "Processing file..." : file ? file.name : "Drop your file here or click to browse"}
+              <p className="text-sm font-medium text-foreground mb-1">
+                {isUploadingFile ? "Processing file..." : file ? file.name : "Drop file here or click to browse"}
               </p>
-              <p className="text-sm text-muted-foreground">Supported formats: CSV, TXT, XLSX, DOCX (up to 10MB)</p>
+              <p className="text-xs text-muted-foreground">CSV, TXT, XLSX, DOCX — up to 10 MB</p>
               <input
                 id="file-input"
                 type="file"
@@ -124,21 +114,22 @@ export function InputSection({
             </div>
 
             {parsedData && (
-              <div className="space-y-4">
-                <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                  <AlertCircle className="h-4 w-4" />
-                  Found {parsedData.headers.length} columns and {parsedData.rows.length} rows
-                </div>
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">
+                  Found {parsedData.headers.length} column{parsedData.headers.length !== 1 ? "s" : ""} · {parsedData.rows.length} row{parsedData.rows.length !== 1 ? "s" : ""}
+                </p>
 
-                <div className="space-y-2">
-                  <Label htmlFor="column-select">Select GitHub Username Column</Label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="column-select" className="text-xs font-medium">
+                    Username Column
+                  </Label>
                   <Select value={selectedColumn} onValueChange={setSelectedColumn}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Choose the column containing GitHub usernames" />
+                    <SelectTrigger className="h-9 text-xs">
+                      <SelectValue placeholder="Select the column with GitHub usernames" />
                     </SelectTrigger>
                     <SelectContent>
                       {parsedData.headers.map((header, index) => (
-                        <SelectItem key={index} value={header}>
+                        <SelectItem key={index} value={header} className="text-xs">
                           {header}
                         </SelectItem>
                       ))}
@@ -146,48 +137,52 @@ export function InputSection({
                   </Select>
                 </div>
 
-                <Button onClick={onProcessUsernames} disabled={!selectedColumn || isProcessing} className="w-full">
+                <Button
+                  onClick={onProcessUsernames}
+                  disabled={!selectedColumn || isProcessing}
+                  className="w-full h-9 text-xs"
+                >
                   {isProcessing ? (
                     <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Processing...
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      Processing…
                     </>
                   ) : (
-                    "Process GitHub Usernames"
+                    "Process Usernames"
                   )}
                 </Button>
               </div>
             )}
           </TabsContent>
 
-          <TabsContent value="manual" className="space-y-4 mt-4">
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="manual-input">GitHub Usernames</Label>
-                <textarea
-                  id="manual-input"
-                  className="w-full h-32 p-3 border border-border rounded-md resize-none focus:outline-none focus:ring-2 focus:ring-ring"
-                  placeholder="Enter GitHub usernames or profile URLs, one per line:&#10;octocat&#10;https://github.com/torvalds&#10;@defunkt"
-                  value={manualInput}
-                  onChange={(e) => setManualInput(e.target.value)}
-                  disabled={isProcessingManual}
-                />
-              </div>
-              <Button
-                onClick={onProcessManualInput}
-                className="w-full"
-                disabled={!manualInput.trim() || isProcessingManual}
-              >
-                {isProcessingManual ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Processing...
-                  </>
-                ) : (
-                  "Process Manual Input"
-                )}
-              </Button>
+          <TabsContent value="manual" className="space-y-3 mt-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="manual-input" className="text-xs font-medium">
+                Usernames
+              </Label>
+              <textarea
+                id="manual-input"
+                className="w-full h-32 rounded-md border border-border/60 bg-background p-3 text-sm resize-none placeholder:text-muted-foreground/60 focus:outline-none focus:ring-2 focus:ring-ring/30 focus:border-foreground/20"
+                placeholder={"octocat\nhttps://github.com/torvalds\n@defunkt"}
+                value={manualInput}
+                onChange={(e) => setManualInput(e.target.value)}
+                disabled={isProcessingManual}
+              />
             </div>
+            <Button
+              onClick={onProcessManualInput}
+              className="w-full h-9 text-xs"
+              disabled={!manualInput.trim() || isProcessingManual}
+            >
+              {isProcessingManual ? (
+                <>
+                  <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                  Processing…
+                </>
+              ) : (
+                "Process Input"
+              )}
+            </Button>
           </TabsContent>
         </Tabs>
       </CardContent>

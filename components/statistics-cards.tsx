@@ -1,4 +1,3 @@
-import { Card, CardContent } from "@/components/ui/card"
 import { Users, UserCheck, UserX, Shield, XCircle, Copy, AlertCircle, Star, GitFork } from "lucide-react"
 
 interface ProcessedUser {
@@ -44,82 +43,21 @@ export function StatisticsCards({ users }: StatisticsCardsProps) {
     hasRepositoryData: users.some((u) => u.repositoryEngagement),
   }
 
-  console.log("StatisticsCards - Total users:", users.length)
-  console.log(
-    "StatisticsCards - Users with repository engagement:",
-    users.filter((u) => u.repositoryEngagement).length,
-  )
-  console.log("StatisticsCards - Repository stats:", repositoryStats)
-  console.log(
-    "StatisticsCards - Sample user with engagement:",
-    users.find((u) => u.repositoryEngagement),
-  )
-
   const baseCards = [
-    {
-      icon: Users,
-      value: statistics.total,
-      label: "Total",
-      color: "text-muted-foreground",
-    },
-    {
-      icon: UserCheck,
-      value: statistics.valid,
-      label: "Valid",
-      color: "text-green-600",
-    },
-    {
-      icon: Shield,
-      value: statistics.fake,
-      label: "Fake Entries",
-      color: "text-purple-600",
-    },
-    {
-      icon: UserX,
-      value: statistics.invalid,
-      label: "Invalid",
-      color: "text-red-600",
-    },
-    {
-      icon: XCircle,
-      value: statistics.deleted,
-      label: "Deleted",
-      color: "text-red-600",
-    },
-    {
-      icon: Copy,
-      value: statistics.duplicate,
-      label: "Duplicates",
-      color: "text-yellow-600",
-    },
-    {
-      icon: AlertCircle,
-      value: statistics.pending,
-      label: "Pending",
-      color: "text-gray-600",
-    },
-    {
-      icon: AlertCircle,
-      value: statistics.error,
-      label: "Errors",
-      color: "text-orange-600",
-    },
+    { icon: Users, value: statistics.total, label: "Total" },
+    { icon: UserCheck, value: statistics.valid, label: "Valid" },
+    { icon: Shield, value: statistics.fake, label: "Fake" },
+    { icon: UserX, value: statistics.invalid, label: "Invalid" },
+    { icon: XCircle, value: statistics.deleted, label: "Deleted" },
+    { icon: Copy, value: statistics.duplicate, label: "Duplicates" },
+    { icon: AlertCircle, value: statistics.pending, label: "Pending" },
+    { icon: AlertCircle, value: statistics.error, label: "Errors" },
   ]
 
   const repositoryCards = repositoryStats.hasRepositoryData
     ? [
-        {
-          icon: Star,
-          value: repositoryStats.starred,
-          label: "Starred Repo",
-          color: "text-blue-600",
-        },
-        {
-          icon: GitFork,
-          value: repositoryStats.forked,
-          label: "Forked Repo",
-          color: "text-indigo-600",
-        },
+        { icon: Star, value: repositoryStats.starred, label: "Starred" },
+        { icon: GitFork, value: repositoryStats.forked, label: "Forked" },
       ]
     : []
 
@@ -127,20 +65,19 @@ export function StatisticsCards({ users }: StatisticsCardsProps) {
 
   return (
     <div
-      className={`grid grid-cols-2 md:grid-cols-4 ${repositoryStats.hasRepositoryData ? "lg:grid-cols-5 xl:grid-cols-10" : "lg:grid-cols-8"} gap-4`}
+      className={`grid grid-cols-2 sm:grid-cols-4 ${repositoryStats.hasRepositoryData ? "lg:grid-cols-5" : "lg:grid-cols-4"} gap-2`}
     >
       {allCards.map((card, index) => (
-        <Card key={index}>
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2">
-              <card.icon className={`h-4 w-4 ${card.color}`} />
-              <div>
-                <p className={`text-2xl font-bold ${card.color}`}>{card.value}</p>
-                <p className="text-xs text-muted-foreground">{card.label}</p>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
+        <div
+          key={index}
+          className="flex items-center gap-3 rounded-lg border border-border/60 bg-card px-3 py-2.5"
+        >
+          <card.icon className="h-4 w-4 text-muted-foreground shrink-0" />
+          <div className="min-w-0">
+            <p className="text-lg font-semibold leading-none tracking-tight text-foreground tabular-nums">{card.value}</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">{card.label}</p>
+          </div>
+        </div>
       ))}
     </div>
   )

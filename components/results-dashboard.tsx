@@ -1,9 +1,8 @@
 "use client"
 
 import { useMemo } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Badge } from "@/components/ui/badge"
 import { Loader2, RotateCcw } from "lucide-react"
 import { StatisticsCards } from "@/components/statistics-cards"
 import { ValidationProgress } from "@/components/validation-progress"
@@ -42,6 +41,9 @@ interface ResultsDashboardProps {
   onCancel?: () => void
   estimatedTime?: number | null
   onRetryFailed?: () => void
+  onRecheckEngagement?: (usernames?: string[]) => void | Promise<void>
+  isRecheckingEngagement?: boolean
+  repositoryUrl?: string
 }
 
 export function ResultsDashboard({
@@ -56,6 +58,9 @@ export function ResultsDashboard({
   onCancel,
   estimatedTime,
   onRetryFailed,
+  onRecheckEngagement,
+  isRecheckingEngagement,
+  repositoryUrl,
 }: ResultsDashboardProps) {
   const statistics = useMemo(() => {
     const total = users.length
@@ -68,12 +73,10 @@ export function ResultsDashboard({
     return users.filter((u) => u.status === "error" && u.username && u.error?.includes("Rate limit exceeded")).length
   }, [users])
 
-  if (users.length === 0) {
-    return null
-  }
+  if (users.length === 0) return null
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <ValidationProgress
         isValidating={isValidating || false}
         validationProgress={validationProgress || 0}
@@ -87,47 +90,51 @@ export function ResultsDashboard({
 
       <StatisticsCards users={users} />
 
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
+      <Card className="border-border/60">
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
-              <CardTitle>Validation Results</CardTitle>
-              <CardDescription>
-                {users.length} usernames processed
-                {users.length > 1000 && <span className="ml-2 text-blue-600">• Large dataset detected</span>}
-              </CardDescription>
+              <CardTitle className="text-base font-semibold">Results</CardTitle>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {users.length.toLocaleString()} usernames processed
+              </p>
             </div>
             <div className="flex gap-2">
               {statistics.pending > 0 && onValidate && (
-                <Button onClick={onValidate} disabled={isValidating}>
+                <Button onClick={onValidate} disabled={isValidating} size="sm" className="h-8 text-xs">
                   {isValidating ? (
                     <>
-                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                      Validating...
+                      <Loader2 className="h-3.5 w-3.5 mr-1.5 animate-spin" />
+                      Validating…
                     </>
                   ) : (
                     <>
                       Validate with GitHub
                       {statistics.pending > 100 && (
-                        <Badge variant="secondary" className="ml-2">
+                        <span className="ml-1.5 rounded bg-foreground/10 px-1.5 py-0.5 text-[10px] font-mono">
                           {statistics.pending}
-                        </Badge>
+                        </span>
                       )}
                     </>
                   )}
                 </Button>
               )}
               {failedRetryableCount > 0 && onRetryFailed && (
-                <Button onClick={onRetryFailed} disabled={isValidating} variant="secondary">
-                  <RotateCcw className="h-4 w-4 mr-2" />
-                  Retry Failed ({failedRetryableCount})
+                <Button onClick={onRetryFailed} disabled={isValidating} variant="outline" size="sm" className="h-8 text-xs">
+                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                  Retry ({failedRetryableCount})
                 </Button>
               )}
             </div>
           </div>
         </CardHeader>
         <CardContent>
-          <ResultsTable users={users} />
+          <ResultsTable
+            users={users}
+            onRecheckEngagement={onRecheckEngagement}
+            isRecheckingEngagement={isRecheckingEngagement}
+            repositoryUrl={repositoryUrl}
+          />
         </CardContent>
       </Card>
     </div>

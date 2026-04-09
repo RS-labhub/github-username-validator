@@ -1,10 +1,12 @@
-import { type NextRequest, NextResponse } from "next/server";
+﻿import { type NextRequest, NextResponse } from "next/server";
+
 import pLimit from "p-limit";
 
 interface RepositoryEngagementRequest {
   repositoryUrl: string;
   usernames: string[];
   githubToken?: string;
+  checkMode?: "both" | "stars" | "forks";
 }
 
 interface UserEngagement {
@@ -15,244 +17,219 @@ interface UserEngagement {
 }
 
 interface RepositoryEngagementResponse {
-  repository: {
-    owner: string;
-    repo: string;
-    url: string;
-  };
+  repository: { owner: string; repo: string; url: string };
   users: UserEngagement[];
-  summary: {
-    totalUsers: number;
-    starred: number;
-    forked: number;
-    errors: number;
-  };
+  summary: { totalUsers: number; starred: number; forked: number; errors: number };
 }
 
-// --- Utility: Parse GitHub repo URL ---
-function parseRepositoryUrl(
-  url: string
-): { owner: string; repo: string } | null {
+function parseRepositoryUrl(url: string): { owner: string; repo: string } | null {
   const match = url.match(/github\.com\/([^/]+)\/([^/]+)/);
   if (!match) return null;
-  return {
-    owner: match[1],
-    repo: match[2].replace(/\.git$/, ""),
-  };
+  return { owner: match[1], repo: match[2].replace(/\.git$/, "").replace(/[?#].*$/, "") };
 }
 
-// --- REST: Check one user ---
-async function checkUserEngagement(
-  username: string,
-  targetOwner: string,
-  targetRepo: string,
-  token?: string
-): Promise<{ hasStarred: boolean; hasForked: boolean; error?: string }> {
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "User-Agent": "GitHub-Username-Validator",
-  };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-
-  try {
-    let hasStarred = false;
-    let hasForked = false;
-
-    // Check starred repos
-    try {
-      const starredRes = await fetch(
-        `https://api.github.com/users/${username}/starred?per_page=100`,
-        { headers }
-      );
-      if (starredRes.ok) {
-        const repos = await starredRes.json();
-        hasStarred = repos.some(
-          (r: any) =>
-            r.owner?.login?.toLowerCase() === targetOwner.toLowerCase() &&
-            r.name?.toLowerCase() === targetRepo.toLowerCase()
-        );
-      }
-    } catch (err) {
-      console.error(`[REST] Starred check failed for ${username}`, err);
-    }
-
-    // Check forked repos
-    try {
-      const reposRes = await fetch(
-        `https://api.github.com/users/${username}/repos?type=forks&per_page=100`,
-        { headers }
-      );
-      if (reposRes.ok) {
-        const repos = await reposRes.json();
-        hasForked = repos.some(
-          (r: any) =>
-            r.fork &&
-            r.parent &&
-            r.parent.owner?.login?.toLowerCase() ===
-              targetOwner.toLowerCase() &&
-            r.parent.name?.toLowerCase() === targetRepo.toLowerCase()
-        );
-      }
-    } catch (err) {
-      console.error(`[REST] Fork check failed for ${username}`, err);
-    }
-
-    return { hasStarred, hasForked };
-  } catch (error) {
-    return {
-      hasStarred: false,
-      hasForked: false,
-      error: error instanceof Error ? error.message : "Unknown error",
-    };
-  }
-}
-
-// --- Delay helper ---
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-// --- GraphQL batching ---
-async function checkUsersEngagementGraphQL(
+async function checkStarsGraphQL(
   usernames: string[],
-  targetOwner: string,
-  targetRepo: string,
+  owner: string,
+  repo: string,
   token: string
-): Promise<UserEngagement[]> {
-  const results: UserEngagement[] = [];
-  const chunkSize = 30;
-  const limit = pLimit(5); // max 5 batches in parallel (safe for GitHub)
-
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  const targetFull = `${owner}/${repo}`.toLowerCase();
+  const limit = pLimit(3);
+  const batchSize = 8;
   const batches: string[][] = [];
-  for (let i = 0; i < usernames.length; i += chunkSize) {
-    batches.push(usernames.slice(i, i + chunkSize));
-  }
-
-  const batchPromises = batches.map((batch) =>
-    limit(async () => {
-      const query = `
-        query {
-          ${batch
-            .map(
-              (u, idx) => `
-            user${idx}: user(login: "${u}") {
-              login
-              starredRepositories(first: 50, orderBy: {field: STARRED_AT, direction: DESC}) {
-                nodes { nameWithOwner }
-              }
-              repositories(first: 50, isFork: true, orderBy: {field: CREATED_AT, direction: DESC}) {
-                nodes {
-                  name
-                  owner { login }
-                  parent { name owner { login } }
-                }
-              }
-            }`
-            )
-            .join("\n")}
-        }
-      `;
-
-      try {
-        const res = await fetch("https://api.github.com/graphql", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ query }),
-        });
-
-        if (!res.ok) {
-          console.warn(`[GraphQL failed: ${res.status}] → fallback REST`);
-          return await checkUsersEngagementREST(batch, targetOwner, targetRepo, token);
-        }
-
-        const data = await res.json();
-        const targetRepoName = `${targetOwner}/${targetRepo}`.toLowerCase();
-
-        return batch.map((username, idx) => {
-          const userData = data.data?.[`user${idx}`];
-          if (!userData) {
-            return { username, hasStarred: false, hasForked: false, error: "User not found" };
-          }
-
-          const hasStarred = userData.starredRepositories.nodes.some(
-            (r: any) => r.nameWithOwner.toLowerCase() === targetRepoName
-          );
-
-          const hasForked = userData.repositories.nodes.some(
-            (r: any) =>
-              r.parent &&
-              `${r.parent.owner.login}/${r.parent.name}`.toLowerCase() === targetRepoName
-          );
-
-          return { username, hasStarred, hasForked };
-        });
-      } catch (err) {
-        console.warn(`[GraphQL exception] → fallback REST`, err);
-        return await checkUsersEngagementREST(batch, targetOwner, targetRepo, token);
-      }
-    })
-  );
-
-  const settled = await Promise.all(batchPromises);
-  settled.forEach((arr) => results.push(...arr));
-
-  return results;
-}
-
-// --- REST batching ---
-async function checkUsersEngagementREST(
-  usernames: string[],
-  targetOwner: string,
-  targetRepo: string,
-  token?: string
-): Promise<UserEngagement[]> {
-  const results: UserEngagement[] = [];
-  const batchSize = token ? 20 : 5;
-  const delayMs = token ? 300 : 1000;
-
   for (let i = 0; i < usernames.length; i += batchSize) {
-    const batch = usernames.slice(i, i + batchSize);
-
-    const batchResults = await Promise.allSettled(
-      batch.map(async (u) => {
-        try {
-          const r = await checkUserEngagement(
-            u,
-            targetOwner,
-            targetRepo,
-            token
-          );
-          return { username: u, ...r };
-        } catch (err) {
-          return {
-            username: u,
-            hasStarred: false,
-            hasForked: false,
-            error: err instanceof Error ? err.message : "Unknown error",
-          };
+    batches.push(usernames.slice(i, i + batchSize));
+  }
+  await Promise.all(
+    batches.map((batch) =>
+      limit(async () => {
+        const userQueries = batch
+          .map(
+            (u, idx) => `
+          user${idx}: user(login: "${u}") {
+            starredRepositories(first: 100, orderBy: {field: STARRED_AT, direction: DESC}) {
+              nodes { nameWithOwner }
+            }
+          }`
+          )
+          .join("\n");
+        const query: string = `query { ${userQueries} }`;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const res: Response = await fetch("https://api.github.com/graphql", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "User-Agent": "GitHub-Username-Validator",
+              },
+              body: JSON.stringify({ query }),
+            });
+            if (res.status === 502 || res.status === 503) {
+              if (attempt < 2) {
+                await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+                continue;
+              }
+              break;
+            }
+            if (!res.ok) break;
+            const data: any = await res.json();
+            batch.forEach((username, idx) => {
+              const ud = data?.data?.[`user${idx}`];
+              if (!ud) return;
+              const starred = ud.starredRepositories?.nodes || [];
+              if (starred.some((r: any) => r?.nameWithOwner?.toLowerCase() === targetFull)) {
+                found.add(username.toLowerCase());
+              }
+            });
+            break;
+          } catch {
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          }
         }
       })
-    );
-
-    batchResults.forEach((r) => {
-      if (r.status === "fulfilled") results.push(r.value);
-    });
-
-    if (i + batchSize < usernames.length) {
-      await delay(delayMs);
-    }
-  }
-  return results;
+    )
+  );
+  return found;
 }
 
-// --- Next.js API handler ---
+async function checkStarsREST(
+  usernames: string[],
+  owner: string,
+  repo: string
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  const target = new Set(usernames.map((u) => u.toLowerCase()));
+  const headers = { Accept: "application/vnd.github+json", "User-Agent": "GitHub-Username-Validator" };
+  const maxPages = 400;
+  for (let page = 1; page <= maxPages; page++) {
+    try {
+      const res = await fetch(
+        `https://api.github.com/repos/${owner}/${repo}/stargazers?per_page=100&page=${page}`,
+        { headers }
+      );
+      if (!res.ok) break;
+      const data: any[] = await res.json();
+      if (!data || data.length === 0) break;
+      for (const u of data) {
+        if (u?.login && target.has(u.login.toLowerCase())) {
+          found.add(u.login.toLowerCase());
+        }
+      }
+      if (found.size === target.size) return found;
+      if (data.length < 100) break;
+    } catch {
+      break;
+    }
+  }
+  return found;
+}
+
+async function checkForksGraphQL(
+  usernames: string[],
+  owner: string,
+  repo: string,
+  token: string
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  const targetFull = `${owner}/${repo}`.toLowerCase();
+  const limit = pLimit(3);
+  const batchSize = 15;
+  const batches: string[][] = [];
+  for (let i = 0; i < usernames.length; i += batchSize) {
+    batches.push(usernames.slice(i, i + batchSize));
+  }
+  await Promise.all(
+    batches.map((batch) =>
+      limit(async () => {
+        const queries = batch
+          .map(
+            (u, idx) => `
+          repo${idx}: repository(owner: "${u}", name: "${repo}") {
+            isFork
+            parent { nameWithOwner }
+          }`
+          )
+          .join("\n");
+        const query: string = `query { ${queries} }`;
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            const res: Response = await fetch("https://api.github.com/graphql", {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${token}`,
+                "Content-Type": "application/json",
+                "User-Agent": "GitHub-Username-Validator",
+              },
+              body: JSON.stringify({ query }),
+            });
+            if (res.status === 502 || res.status === 503) {
+              if (attempt < 2) {
+                await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+                continue;
+              }
+              break;
+            }
+            if (!res.ok) break;
+            const data: any = await res.json();
+            batch.forEach((username, idx) => {
+              const rd = data?.data?.[`repo${idx}`];
+              if (rd?.isFork && rd.parent?.nameWithOwner?.toLowerCase() === targetFull) {
+                found.add(username.toLowerCase());
+              }
+            });
+            break;
+          } catch {
+            if (attempt < 2) await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+          }
+        }
+      })
+    )
+  );
+  return found;
+}
+
+async function checkForksREST(
+  usernames: string[],
+  owner: string,
+  repo: string
+): Promise<Set<string>> {
+  const found = new Set<string>();
+  const targetFull = `${owner}/${repo}`.toLowerCase();
+  const limit = pLimit(5);
+  const headers = { Accept: "application/vnd.github+json", "User-Agent": "GitHub-Username-Validator" };
+  await Promise.all(
+    usernames.map((username) =>
+      limit(async () => {
+        try {
+          const res = await fetch(
+            `https://api.github.com/repos/${username}/${repo}`,
+            { headers }
+          );
+          if (!res.ok) return;
+          const rd: any = await res.json();
+          if (
+            rd.fork &&
+            (rd.parent?.full_name?.toLowerCase() === targetFull ||
+              rd.source?.full_name?.toLowerCase() === targetFull)
+          ) {
+            found.add(username.toLowerCase());
+          }
+        } catch {
+          /* skip */
+        }
+      })
+    )
+  );
+  return found;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body: RepositoryEngagementRequest = await request.json();
-    const { repositoryUrl, usernames, githubToken } = body;
+    const { repositoryUrl, usernames, githubToken, checkMode = "both" } = body;
 
     if (!repositoryUrl || !Array.isArray(usernames) || usernames.length === 0) {
       return NextResponse.json(
@@ -270,49 +247,40 @@ export async function POST(request: NextRequest) {
     }
     const { owner, repo } = parsed;
 
-    let users: UserEngagement[] = [];
+    const [stargazers, forkers] = await Promise.all([
+      checkMode !== "forks"
+        ? githubToken
+          ? checkStarsGraphQL(usernames, owner, repo, githubToken)
+          : checkStarsREST(usernames, owner, repo)
+        : Promise.resolve(new Set<string>()),
+      checkMode !== "stars"
+        ? githubToken
+          ? checkForksGraphQL(usernames, owner, repo, githubToken)
+          : checkForksREST(usernames, owner, repo)
+        : Promise.resolve(new Set<string>()),
+    ]);
 
-    // GraphQL path (fastest, for up to ~100 usernames per batch)
-    if (githubToken && usernames.length <= 100) {
-      try {
-        users = await checkUsersEngagementGraphQL(
-          usernames,
-          owner,
-          repo,
-          githubToken
-        );
-      } catch (err) {
-        console.warn(`[GraphQL failed] Falling back to REST`, err);
-        users = await checkUsersEngagementREST(
-          usernames,
-          owner,
-          repo,
-          githubToken
-        );
-      }
-    } else {
-      users = await checkUsersEngagementREST(
-        usernames,
-        owner,
-        repo,
-        githubToken
-      );
-    }
+    const users: UserEngagement[] = usernames.map((username) => {
+      const lower = username.toLowerCase();
+      return {
+        username,
+        hasStarred: stargazers.has(lower),
+        hasForked: forkers.has(lower),
+      };
+    });
 
     const summary = {
       totalUsers: users.length,
       starred: users.filter((u) => u.hasStarred).length,
       forked: users.filter((u) => u.hasForked).length,
-      errors: users.filter((u) => u.error).length,
+      errors: 0,
     };
 
-    const response: RepositoryEngagementResponse = {
+    return NextResponse.json({
       repository: { owner, repo, url: repositoryUrl },
       users,
       summary,
-    };
-
-    return NextResponse.json(response);
+    } as RepositoryEngagementResponse);
   } catch (error) {
     console.error("Engagement API error:", error);
     return NextResponse.json(

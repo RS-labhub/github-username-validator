@@ -1,17 +1,22 @@
 "use client"
 
 import { useState } from "react"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Key, AlertCircle, Shield, GitFork, Star } from "lucide-react"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Key, AlertCircle, Shield, GitFork, ChevronDown, ChevronUp } from "lucide-react"
+
+export type EngagementMode = "both" | "stars" | "forks"
 
 interface GitHubAuthSectionProps {
   githubToken: string
   setGithubToken: (token: string) => void
   repositoryUrl: string
   setRepositoryUrl: (url: string) => void
+  engagementMode: EngagementMode
+  setEngagementMode: (mode: EngagementMode) => void
   rateLimitInfo?: {
     remaining: number
     limit: number
@@ -31,6 +36,8 @@ export function GitHubAuthSection({
   setGithubToken,
   repositoryUrl,
   setRepositoryUrl,
+  engagementMode,
+  setEngagementMode,
   rateLimitInfo,
   cacheStats,
   validationMethod,
@@ -41,92 +48,89 @@ export function GitHubAuthSection({
 
   const parseRepositoryUrl = (url: string) => {
     const match = url.match(/github\.com\/([^/]+)\/([^/]+)/)
-    return match ? { owner: match[1], repo: match[2] } : null
+    return match ? { owner: match[1], repo: match[2].replace(/[?#].*$/, "") } : null
   }
 
   const parsedRepo = repositoryUrl ? parseRepositoryUrl(repositoryUrl) : null
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Key className="h-5 w-5" />
-            GitHub Authentication (Optional)
+    <div className="grid gap-4 sm:grid-cols-2">
+      {/* Authentication Card */}
+      <Card className="border-border/60">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <Key className="h-4 w-4 text-muted-foreground" />
+            Authentication
+            <span className="ml-auto text-xs font-normal text-muted-foreground">Optional</span>
           </CardTitle>
-          <CardDescription>
-            Add your GitHub Personal Access Token to increase rate limits from 60 to 5,000 requests per hour and enable
-            GraphQL batch processing.
-          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 p-4 rounded-lg">
-            <div className="flex items-center gap-2 text-blue-800 dark:text-blue-200 mb-2">
-              <AlertCircle className="h-4 w-4" />
-              <span className="text-sm font-medium">Important: Rate Limiting Notice</span>
+        <CardContent className="space-y-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Add a Personal Access Token to increase rate limits from 60 to 5,000 req/hr and enable fast GraphQL batch processing.
+          </p>
+
+          <div className="rounded-md border border-border/60 bg-muted/30 p-3 space-y-1.5">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <AlertCircle className="h-3.5 w-3.5 text-muted-foreground" />
+              Rate Limits
             </div>
-            <div className="text-xs text-blue-700 dark:text-blue-300 space-y-1">
-              <p>
-                <strong>Without PAT:</strong> All users share 60 requests/hour limit. If multiple users access this app
-                simultaneously, you may encounter rate limit errors even if you haven't used the app before.
-              </p>
-              <p>
-                <strong>With PAT:</strong> You get your own 5,000 requests/hour limit and 20x faster GraphQL batch
-                processing.
-              </p>
+            <div className="text-xs text-muted-foreground leading-relaxed">
+              <p><strong className="text-foreground">Without PAT:</strong> Shared 60 req/hr — may fail under load.</p>
+              <p><strong className="text-foreground">With PAT:</strong> Personal 5,000 req/hr + 20× faster batching.</p>
             </div>
           </div>
 
-          <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 p-3 rounded-lg">
-            <div className="flex items-center gap-2 text-green-800 dark:text-green-200">
-              <Shield className="h-4 w-4" />
-              <span className="text-sm font-medium">Privacy Guarantee</span>
+          <div className="rounded-md border border-border/60 bg-muted/30 p-3">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+              <Shield className="h-3.5 w-3.5 text-muted-foreground" />
+              Your token never leaves your browser.
             </div>
-            <p className="text-xs text-green-700 dark:text-green-300 mt-1">
-              Your GitHub token is <strong>never stored</strong> on our servers. It's only kept in your browser session
-              and will be lost when you refresh the page.
-            </p>
           </div>
 
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowTokenInput(!showTokenInput)}>
-              {showTokenInput ? "Hide" : "Add"} GitHub Token
+          <div className="flex items-center gap-2 pt-1">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowTokenInput(!showTokenInput)}
+              className="h-8 text-xs"
+            >
+              {showTokenInput ? <ChevronUp className="h-3 w-3 mr-1" /> : <ChevronDown className="h-3 w-3 mr-1" />}
+              {githubToken ? "Edit Token" : "Add Token"}
             </Button>
             {githubToken && (
               <>
-                <span className="text-sm text-green-600 flex items-center gap-1">
-                  <Key className="h-3 w-3" />
-                  Token configured
+                <span className="inline-flex items-center gap-1 rounded-md bg-foreground/5 px-2 py-1 text-xs font-medium text-foreground">
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+                  Configured
                 </span>
-                <Button variant="ghost" size="sm" onClick={onClearToken}>
-                  Remove Token
+                <Button variant="ghost" size="sm" onClick={onClearToken} className="h-8 text-xs text-muted-foreground">
+                  Remove
                 </Button>
               </>
             )}
           </div>
 
           {rateLimitInfo && (
-            <div className="bg-muted/50 p-3 rounded-lg space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">Rate Limit:</span>
-                <span className="font-medium">
-                  {rateLimitInfo.remaining} / {rateLimitInfo.limit} remaining
+            <div className="rounded-md border border-border/60 bg-muted/30 p-3 space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">Rate Limit</span>
+                <span className="font-mono font-medium text-foreground">
+                  {rateLimitInfo.remaining}/{rateLimitInfo.limit}
                 </span>
               </div>
               {cacheStats && (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Cache Hit:</span>
-                  <span className="font-medium">
-                    {cacheStats.cached} / {cacheStats.total} ({Math.round((cacheStats.cached / cacheStats.total) * 100)}
-                    %)
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Cache Hit</span>
+                  <span className="font-mono font-medium text-foreground">
+                    {cacheStats.cached}/{cacheStats.total} ({Math.round((cacheStats.cached / cacheStats.total) * 100)}%)
                   </span>
                 </div>
               )}
               {validationMethod && (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-muted-foreground">Method:</span>
-                  <span className="font-medium capitalize">
-                    {validationMethod === "graphql" ? "GraphQL Batch" : "REST API"}
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">Method</span>
+                  <span className="font-medium text-foreground">
+                    {validationMethod === "graphql" ? "GraphQL" : "REST"}
                   </span>
                 </div>
               )}
@@ -134,96 +138,99 @@ export function GitHubAuthSection({
           )}
 
           {showTokenInput && (
-            <div className="space-y-2">
-              <Label htmlFor="github-token">GitHub Personal Access Token</Label>
+            <div className="space-y-2 pt-1">
+              <Label htmlFor="github-token" className="text-xs font-medium">
+                Personal Access Token
+              </Label>
               <Input
                 id="github-token"
                 type="password"
                 placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
                 value={githubToken}
                 onChange={(e) => setGithubToken(e.target.value)}
+                className="h-9 font-mono text-xs"
               />
-              <p className="text-xs text-muted-foreground">
+              <p className="text-xs text-muted-foreground leading-relaxed">
                 Create a token at{" "}
                 <a
                   href="https://github.com/settings/tokens"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-primary hover:underline"
+                  className="font-medium text-foreground underline underline-offset-2 hover:no-underline"
                 >
                   github.com/settings/tokens
                 </a>{" "}
-                with 'public_repo' or 'read:user' scope. Enables GraphQL batch processing for 20x faster validation.
-              </p>
-            </div>
-          )}
-
-          {!githubToken && (
-            <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 p-3 rounded-lg">
-              <div className="flex items-center gap-2 text-yellow-800 dark:text-yellow-200">
-                <AlertCircle className="h-4 w-4" />
-                <span className="text-sm font-medium">Limited Performance</span>
-              </div>
-              <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
-                Without a token, validation is limited to 60 requests/hour and uses slower sequential processing.
-                <strong> Multiple users may cause rate limit errors.</strong>
+                with <code className="rounded bg-muted px-1 py-0.5 text-[11px]">read:user</code> scope.
               </p>
             </div>
           )}
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <GitFork className="h-5 w-5" />
-            Repository Analysis (Optional)
+      {/* Repository Analysis Card */}
+      <Card className="border-border/60">
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-base font-semibold">
+            <GitFork className="h-4 w-4 text-muted-foreground" />
+            Repository Analysis
+            <span className="ml-auto text-xs font-normal text-muted-foreground">Optional</span>
           </CardTitle>
-          <CardDescription>
-            Analyze which validated users have starred or forked a specific GitHub repository.
-          </CardDescription>
         </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 p-4 rounded-lg">
-            <div className="flex items-center gap-2 text-purple-800 dark:text-purple-200 mb-2">
-              <Star className="h-4 w-4" />
-              <span className="text-sm font-medium">Repository Star & Fork Analysis</span>
-            </div>
-            <p className="text-xs text-purple-700 dark:text-purple-300">
-              Enter a GitHub repository URL to check which of your validated users have starred or forked that
-              repository. This helps identify engaged community members and contributors.
-            </p>
-          </div>
+        <CardContent className="space-y-3">
+          <p className="text-xs leading-relaxed text-muted-foreground">
+            Enter a GitHub repository URL to check which validated users have starred or forked it. Helps identify engaged community members.
+          </p>
 
-          <div className="flex items-center gap-2">
-            <Button variant="outline" size="sm" onClick={() => setShowRepoInput(!showRepoInput)}>
-              {showRepoInput ? "Hide" : "Add"} Repository URL
+          <div className="flex items-center gap-2 pt-1 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowRepoInput(!showRepoInput)}
+              className="h-8 text-xs"
+            >
+              {showRepoInput ? <ChevronUp className="h-3 w-3 mr-1" /> : <ChevronDown className="h-3 w-3 mr-1" />}
+              {repositoryUrl ? "Edit URL" : "Add Repository"}
             </Button>
             {repositoryUrl && parsedRepo && (
-              <span className="text-sm text-purple-600 flex items-center gap-1">
-                <GitFork className="h-3 w-3" />
+              <span className="inline-flex items-center gap-1 rounded-md bg-foreground/5 px-2 py-1 text-xs font-medium font-mono text-foreground">
                 {parsedRepo.owner}/{parsedRepo.repo}
               </span>
             )}
           </div>
 
+          <div className="space-y-1.5 pt-1">
+            <Label className="text-xs font-medium">Check Mode</Label>
+            <Select value={engagementMode} onValueChange={(v) => setEngagementMode(v as EngagementMode)}>
+              <SelectTrigger className="h-8 text-xs w-full sm:w-48">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="both" className="text-xs">Stars &amp; Forks</SelectItem>
+                <SelectItem value="stars" className="text-xs">Stars only</SelectItem>
+                <SelectItem value="forks" className="text-xs">Forks only</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+
           {showRepoInput && (
-            <div className="space-y-2">
-              <Label htmlFor="repository-url">GitHub Repository URL</Label>
+            <div className="space-y-2 pt-1">
+              <Label htmlFor="repository-url" className="text-xs font-medium">
+                Repository URL
+              </Label>
               <Input
                 id="repository-url"
                 type="url"
                 placeholder="https://github.com/owner/repository"
                 value={repositoryUrl}
                 onChange={(e) => setRepositoryUrl(e.target.value)}
+                className="h-9 text-xs"
               />
               <p className="text-xs text-muted-foreground">
-                Enter the full GitHub repository URL (e.g., https://github.com/vercel/next.js) to analyze stars and
-                forks from your validated users.
+                e.g., https://github.com/vercel/next.js
               </p>
               {repositoryUrl && !parsedRepo && (
-                <p className="text-xs text-red-600">
-                  Please enter a valid GitHub repository URL in the format: https://github.com/owner/repository
+                <p className="text-xs text-destructive">
+                  Invalid URL. Use format: https://github.com/owner/repository
                 </p>
               )}
             </div>

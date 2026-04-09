@@ -1,10 +1,10 @@
 "use client"
 
 import type React from "react"
-import { useState, useCallback, useEffect } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { useToast } from "@/hooks/use-toast"
 import { AppHeader } from "@/components/app-header"
-import { GitHubAuthSection } from "@/components/github-auth-section"
+import { GitHubAuthSection, type EngagementMode } from "@/components/github-auth-section"
 import { InputSection } from "@/components/input-section"
 import { ResultsDashboard } from "@/components/results-dashboard"
 
@@ -32,6 +32,13 @@ interface ProcessedUser {
     hasFork: boolean
     repositoryUrl: string
   }
+}
+
+interface RepositoryEngagementUser {
+  username: string
+  hasStarred: boolean
+  hasForked: boolean
+  error?: string
 }
 
 export default function GitHubValidator() {
@@ -64,26 +71,15 @@ export default function GitHubValidator() {
   const [startTime, setStartTime] = useState<number | null>(null)
   const [activeTab, setActiveTab] = useState("upload")
   const [repositoryUrl, setRepositoryUrl] = useState("")
-  const [isValidatingGitHub, setIsValidatingGitHub] = useState(false) // Added loading state for Process GitHub Usernames button
+  const [engagementMode, setEngagementMode] = useState<EngagementMode>("both")
+  const [isValidatingGitHub, setIsValidatingGitHub] = useState(false)
+  const [isRecheckingEngagement, setIsRecheckingEngagement] = useState(false)
   const { toast } = useToast()
+  
+  // Use ref to store initial estimated time for accurate timer calculations
+  const initialEstimatedTimeRef = useRef<number>(0)
 
-  useEffect(() => {
-    let interval: NodeJS.Timeout
-    if (isValidating && estimatedTime && !isPaused && startTime) {
-      interval = setInterval(() => {
-        const elapsed = (Date.now() - startTime) / 1000
-        const remaining = Math.max(0, estimatedTime - elapsed)
-        setEstimatedTime(remaining)
-
-        if (remaining <= 0) {
-          setEstimatedTime(null)
-        }
-      }, 1000)
-    }
-    return () => {
-      if (interval) clearInterval(interval)
-    }
-  }, [isValidating, estimatedTime, isPaused, startTime])
+  // Timer is now calculated from real batch progress in validateSpecificUsernames
 
   const parseFile = async (uploadedFile: File): Promise<ParsedData> => {
     const fileName = uploadedFile.name.toLowerCase()
@@ -265,6 +261,9 @@ export default function GitHubValidator() {
     // Remove trailing slashes and whitespace
     cleanedValue = cleanedValue.replace(/\/+$/, "").trim()
 
+    // Strip fragment identifiers (#...) and query strings (?...) that may be appended
+    cleanedValue = cleanedValue.replace(/[#?].*$/, "").trim()
+
     return cleanUsername(cleanedValue)
   }
 
@@ -399,6 +398,90 @@ export default function GitHubValidator() {
     await validateSpecificUsernames(usernamesToRetry)
   }, [processedUsers, toast])
 
+  const fetchRepositoryEngagementData = useCallback(
+    async ({
+      usernames,
+      repositoryUrl,
+      signal,
+      mode,
+    }: {
+      usernames: string[]
+      repositoryUrl: string
+      signal?: AbortSignal
+      mode?: EngagementMode
+    }): Promise<RepositoryEngagementUser[] | null> => {
+      const trimmedRepositoryUrl = repositoryUrl.trim()
+      if (!trimmedRepositoryUrl || usernames.length === 0) {
+        return null
+      }
+
+      const uniqueUsernames: string[] = []
+      const seen = new Set<string>()
+      usernames.forEach((username) => {
+        if (!username) return
+        const key = username.toLowerCase()
+        if (!seen.has(key)) {
+          seen.add(key)
+          uniqueUsernames.push(username)
+        }
+      })
+
+      if (uniqueUsernames.length === 0) {
+        return null
+      }
+
+      const repoBatchSize = 100
+      const aggregated: RepositoryEngagementUser[] = []
+      const token = githubToken.trim()
+
+      for (let i = 0; i < uniqueUsernames.length; i += repoBatchSize) {
+        if (signal?.aborted) {
+          return null
+        }
+
+        const batch = uniqueUsernames.slice(i, i + repoBatchSize)
+        const requestBody: Record<string, any> = {
+          repositoryUrl: trimmedRepositoryUrl,
+          usernames: batch,
+          checkMode: mode || "both",
+        }
+        if (token) {
+          requestBody.githubToken = token
+        }
+
+        const response = await fetch("/api/check-repository-engagement", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(requestBody),
+          signal,
+        })
+
+        if (!response.ok) {
+          const errorPayload = await response.text()
+          let parsedError: any = null
+          try {
+            parsedError = JSON.parse(errorPayload)
+          } catch {
+            parsedError = null
+          }
+          throw new Error(parsedError?.error || errorPayload || "Repository engagement request failed")
+        }
+
+        const batchData = await response.json()
+        aggregated.push(...((batchData.users || []) as RepositoryEngagementUser[]))
+
+        if (i + repoBatchSize < uniqueUsernames.length) {
+          await new Promise((resolve) => setTimeout(resolve, 800))
+        }
+      }
+
+      return aggregated
+    },
+    [githubToken],
+  )
+
   const validateSpecificUsernames = useCallback(
     async (usernames: string[]) => {
       if (usernames.length === 0) return
@@ -409,394 +492,192 @@ export default function GitHubValidator() {
       setValidationProgress(0)
       setIsPaused(false)
 
+      const trimmedRepositoryUrl = repositoryUrl.trim()
+      const trimmedGithubToken = githubToken.trim()
+
       console.log("Starting validation with repository URL:", repositoryUrl.trim())
-      console.log("GitHub token present:", !!githubToken.trim())
+      console.log("GitHub token present:", !!trimmedGithubToken)
       console.log("Usernames to validate:", usernames.length)
 
       try {
-        const useBatchAPI = usernames.length >= 10 || githubToken.trim()
-        const apiEndpoint = useBatchAPI ? "/api/validate-github-batch" : "/api/validate-github"
+        const apiEndpoint = "/api/validate-github-batch"
+        const validationStartTime = Date.now()
 
-        let estimatedSeconds: number
-        if (useBatchAPI && githubToken.trim()) {
-          // GraphQL batching: ~20 requests for 2000 users
-          estimatedSeconds = Math.ceil(usernames.length / 100) * 2 + 5
-        } else if (useBatchAPI) {
-          // REST parallel: faster than sequential
-          estimatedSeconds = Math.ceil(usernames.length / 20) * 3 + 10
-        } else {
-          // Sequential REST (old method)
-          estimatedSeconds = usernames.length * 2.5 + Math.ceil(usernames.length / 20) * 10
+        // ─── Phase 1: Validate usernames in real batches ───
+        // Split into batches for real progress tracking (max 200 per batch for GraphQL, 50 for REST)
+        const batchSize = trimmedGithubToken ? 200 : 50
+        const validationBatches: string[][] = []
+        for (let i = 0; i < usernames.length; i += batchSize) {
+          validationBatches.push(usernames.slice(i, i + batchSize))
         }
 
-        if (repositoryUrl.trim()) {
-          estimatedSeconds += Math.ceil(usernames.length / 100) * 3 // Repository analysis time
-        }
+        // Total steps: validation batches + (optional) engagement batches
+        const totalValidationBatches = validationBatches.length
+        // Engagement phase will take roughly same weight as validation
+        const hasEngagementPhase = !!trimmedRepositoryUrl
+        const totalWeight = totalValidationBatches + (hasEngagementPhase ? Math.max(1, Math.ceil(totalValidationBatches * 0.3)) : 0)
+        let completedWeight = 0
 
-        setEstimatedTime(estimatedSeconds)
-        setStartTime(Date.now())
+        setBatchProgress({ current: 0, total: totalValidationBatches })
+        setStartTime(validationStartTime)
+        initialEstimatedTimeRef.current = 0 // Will be calculated from actual elapsed time
 
-        if (useBatchAPI) {
-          const requestBody: any = {
-            usernames,
-            method: githubToken.trim() ? "auto" : "rest",
-          }
-          if (githubToken.trim()) {
-            requestBody.githubToken = githubToken.trim()
-          }
+        const allResults: any[] = []
 
-          console.log("Making batch API request to:", apiEndpoint)
-          const response = await fetch(apiEndpoint, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify(requestBody),
-            signal: controller.signal,
-          })
-
-          if (!response.ok) {
-            const errorData = await response.json()
-            console.error("Batch validation failed:", errorData)
-            throw new Error(errorData.error || "Batch validation failed")
+        for (let i = 0; i < validationBatches.length; i++) {
+          if (controller.signal.aborted) throw new Error("Cancelled")
+          while (isPaused && !controller.signal.aborted) {
+            await new Promise((resolve) => setTimeout(resolve, 500))
           }
 
-          const { results, rateLimit, cacheStats: cache, method } = await response.json()
-          console.log("Batch validation completed, results:", results.length)
+          const batch = validationBatches[i]
+          setBatchProgress({ current: i + 1, total: totalValidationBatches })
 
-          setRateLimitInfo(rateLimit)
-          setCacheStats(cache)
-          setValidationMethod(method)
-
-          let repositoryEngagementData: any = null
-          if (repositoryUrl.trim()) {
-            const validUsernames = results.filter((r: any) => r.status === "valid").map((r: any) => r.username)
-
-            console.log("Repository URL provided:", repositoryUrl.trim())
-            console.log("Valid usernames for repo analysis:", validUsernames.length)
-
-            if (validUsernames.length > 0) {
-              try {
-                console.log("Starting repository engagement check...")
-
-                const repoBatchSize = 100
-                const repoResults: any[] = []
-
-                for (let i = 0; i < validUsernames.length; i += repoBatchSize) {
-                  const batch = validUsernames.slice(i, i + repoBatchSize)
-                  console.log(
-                    `Processing repository batch ${Math.floor(i / repoBatchSize) + 1}/${Math.ceil(validUsernames.length / repoBatchSize)}, size: ${batch.length}`,
-                  )
-
-                  const repoRequestBody = {
-                    repositoryUrl: repositoryUrl.trim(),
-                    usernames: batch,
-                    githubToken: githubToken.trim() || undefined,
-                  }
-
-                  const repoResponse = await fetch("/api/check-repository-engagement", {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                    },
-                    body: JSON.stringify(repoRequestBody),
-                    signal: controller.signal,
-                  })
-
-                  if (repoResponse.ok) {
-                    const batchData = await repoResponse.json()
-                    repoResults.push(...batchData.users)
-                    console.log(
-                      `Repository batch ${Math.floor(i / repoBatchSize) + 1} completed, users: ${batchData.users.length}`,
-                    )
-                  } else {
-                    let errorDetails
-                    try {
-                      errorDetails = await repoResponse.json()
-                    } catch {
-                      errorDetails = { error: await repoResponse.text() }
-                    }
-                    console.error(`Repository batch ${Math.floor(i / repoBatchSize) + 1} failed:`, errorDetails)
-                  }
-
-                  // Small delay between batches
-                  if (i + repoBatchSize < validUsernames.length) {
-                    await new Promise((resolve) => setTimeout(resolve, 1000))
-                  }
-                }
-
-                if (repoResults.length > 0) {
-                  repositoryEngagementData = {
-                    users: repoResults,
-                    summary: {
-                      starred: repoResults.filter((u) => u.hasStarred).length,
-                      forked: repoResults.filter((u) => u.hasForked).length,
-                      total: repoResults.length,
-                      errors: 0,
-                    },
-                  }
-
-                  console.log("Repository engagement data received:", {
-                    totalUsers: repositoryEngagementData.users.length,
-                    starred: repositoryEngagementData.summary.starred,
-                    forked: repositoryEngagementData.summary.forked,
-                  })
-
-                  toast({
-                    title: "Repository Analysis Complete",
-                    description: `Found ${repositoryEngagementData.summary.starred} users who starred and ${repositoryEngagementData.summary.forked} who forked the repository.`,
-                  })
-                } else {
-                  console.log("No repository engagement data received")
-                }
-              } catch (repoError) {
-                console.error("Repository engagement check failed:", repoError)
-                toast({
-                  title: "Repository Analysis Failed",
-                  description: "Username validation completed, but repository analysis encountered an error.",
-                  variant: "destructive",
-                })
-              }
-            } else {
-              console.log("No valid usernames found for repository analysis")
+          try {
+            const requestBody: any = {
+              usernames: batch,
+              method: trimmedGithubToken ? "auto" : "rest",
             }
+            if (trimmedGithubToken) requestBody.githubToken = trimmedGithubToken
+
+            const response = await fetch(apiEndpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(requestBody),
+              signal: controller.signal,
+            })
+
+            if (!response.ok) {
+              const errorData = await response.json().catch(() => ({}))
+              if (response.status === 429) {
+                const waitTime = Math.min(120000, 15000 * Math.pow(2, Math.min(i, 3)))
+                toast({
+                  title: "Rate Limited",
+                  description: `Waiting ${Math.round(waitTime / 1000)}s before retrying…`,
+                })
+                await new Promise((resolve) => setTimeout(resolve, waitTime))
+                i-- // Retry
+                continue
+              }
+              throw new Error(errorData.error || "Validation failed")
+            }
+
+            const { results, rateLimit, cacheStats: cache, method } = await response.json()
+            if (rateLimit) setRateLimitInfo(rateLimit)
+            if (cache) setCacheStats(cache)
+            if (method) setValidationMethod(method)
+            allResults.push(...results)
+          } catch (err) {
+            if (err instanceof Error && err.name === "AbortError") throw err
+            // Mark entire batch as error
+            batch.forEach((username) => {
+              allResults.push({ username, status: "error", error: err instanceof Error ? err.message : "Failed" })
+            })
           }
 
-          setValidationProgress(100)
-          setEstimatedTime(null)
-          setStartTime(null)
+          completedWeight++
+          const realProgress = Math.round((completedWeight / totalWeight) * 100)
+          setValidationProgress(Math.min(realProgress, hasEngagementPhase ? 90 : 100))
 
-          setProcessedUsers((prev) => {
-            const updatedUsers = prev.map((user) => {
+          // Calculate real estimated time from actual elapsed
+          const elapsed = (Date.now() - validationStartTime) / 1000
+          const remaining = (elapsed / completedWeight) * (totalWeight - completedWeight)
+          setEstimatedTime(Math.max(0, remaining))
+
+          // Update processed users incrementally
+          setProcessedUsers((prev) =>
+            prev.map((user) => {
               if (user.username && usernames.includes(user.username)) {
-                const result = results.find((r: any) => r.username === user.username)
+                const result = allResults.find((r: any) => r.username === user.username)
                 if (result) {
-                  let repositoryEngagement = undefined
-                  if (repositoryEngagementData && result.status === "valid") {
-                    const engagementUser = repositoryEngagementData.users.find(
-                      (u: any) => u.username.toLowerCase() === user.username?.toLowerCase(),
-                    )
-                    if (engagementUser) {
-                      repositoryEngagement = {
-                        hasStarred: engagementUser.hasStarred,
-                        hasFork: engagementUser.hasForked,
-                        repositoryUrl: repositoryUrl.trim(),
-                      }
-                      console.log("Added repository engagement for user:", user.username, repositoryEngagement)
-                    }
-                  }
-
-                  return {
-                    ...user,
-                    status: result.status,
-                    error: result.error,
-                    profileData: result.profileData,
-                    repositoryEngagement,
-                  }
+                  return { ...user, status: result.status, error: result.error, profileData: result.profileData }
                 }
               }
               return user
-            })
+            }),
+          )
 
-            const usersWithRepoData = updatedUsers.filter((u) => u.repositoryEngagement)
-            console.log("Final users with repository engagement data:", usersWithRepoData.length)
-            if (usersWithRepoData.length > 0) {
-              console.log("Sample repository engagement:", usersWithRepoData[0]?.repositoryEngagement)
-            }
-
-            return updatedUsers
-          })
-        } else {
-          const chunkSize = 20
-          const chunks: string[][] = []
-
-          for (let i = 0; i < usernames.length; i += chunkSize) {
-            chunks.push(usernames.slice(i, i + chunkSize))
+          // Small delay between batches to respect rate limits
+          if (i < validationBatches.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, trimmedGithubToken ? 200 : 1000))
           }
+        }
 
-          setBatchProgress({ current: 0, total: chunks.length })
+        // ─── Phase 2: Repository engagement (if configured) ───
+        let repositoryEngagementUsers: RepositoryEngagementUser[] | null = null
+        if (trimmedRepositoryUrl) {
+          const validUsernames = allResults.filter((r: any) => r.status === "valid").map((r: any) => r.username)
 
-          const allResults: any[] = []
-          let processedCount = 0
-          const startTime = Date.now()
-
-          for (let i = 0; i < chunks.length; i++) {
-            if (controller.signal.aborted) {
-              throw new Error("Validation cancelled by user")
-            }
-
-            while (isPaused && !controller.signal.aborted) {
-              await new Promise((resolve) => setTimeout(resolve, 1000))
-            }
-
-            const chunk = chunks[i]
-            setBatchProgress({ current: i + 1, total: chunks.length })
-
+          if (validUsernames.length > 0) {
             try {
-              const requestBody: any = { usernames: chunk }
-              if (githubToken.trim()) {
-                requestBody.githubToken = githubToken.trim()
-              }
-
-              const response = await fetch(apiEndpoint, {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                },
-                body: JSON.stringify(requestBody),
+              repositoryEngagementUsers = await fetchRepositoryEngagementData({
+                usernames: validUsernames,
+                repositoryUrl: trimmedRepositoryUrl,
                 signal: controller.signal,
+                mode: engagementMode,
               })
 
-              if (!response.ok) {
-                const errorData = await response.json()
-
-                if (response.status === 429) {
-                  const waitTime = Math.min(300000, 30000 * Math.pow(2, Math.min(i, 4)))
-
-                  toast({
-                    title: "Rate Limited",
-                    description: `Waiting ${Math.round(waitTime / 1000)}s before continuing...`,
-                  })
-
-                  await new Promise((resolve) => setTimeout(resolve, waitTime))
-                  i-- // Retry the same chunk
-                  continue
-                }
-
-                throw new Error(errorData.error || "Validation failed")
+              if (repositoryEngagementUsers?.length) {
+                const starredCount = repositoryEngagementUsers.filter((u) => u.hasStarred).length
+                const forkedCount = repositoryEngagementUsers.filter((u) => u.hasForked).length
+                toast({
+                  title: "Repository Analysis Complete",
+                  description: `${starredCount} starred, ${forkedCount} forked.`,
+                })
               }
+            } catch (repoError) {
+              console.error("Repository engagement check failed:", repoError)
+              toast({
+                title: "Repository Analysis Failed",
+                description: "Validation completed but engagement analysis encountered an error.",
+                variant: "destructive",
+              })
+            }
+          }
+        }
 
-              const { results, rateLimit } = await response.json()
-              if (rateLimit) setRateLimitInfo(rateLimit)
+        // ─── Final: Update all results at once ───
+        setValidationProgress(100)
+        setEstimatedTime(null)
+        setStartTime(null)
+        initialEstimatedTimeRef.current = 0
+        setBatchProgress({ current: 0, total: 0 })
 
-              allResults.push(...results)
-              processedCount += chunk.length
-
-              const progress = Math.round((processedCount / usernames.length) * 100)
-              setValidationProgress(progress)
-
-              const elapsedTime = (Date.now() - startTime) / 1000
-              const remainingUsernames = usernames.length - processedCount
-              const avgTimePerUsername = elapsedTime / processedCount
-              setEstimatedTime(remainingUsernames * avgTimePerUsername)
-
-              // Update specific usernames in the results
-              setProcessedUsers((prev) =>
-                prev.map((user) => {
-                  if (user.username && usernames.includes(user.username)) {
-                    const result = allResults.find((r: any) => r.username === user.username)
-                    if (result) {
-                      return {
-                        ...user,
-                        status: result.status,
-                        error: result.error,
-                        profileData: result.profileData,
-                      }
+        setProcessedUsers((prev) =>
+          prev.map((user) => {
+            if (user.username && usernames.includes(user.username)) {
+              const result = allResults.find((r: any) => r.username === user.username)
+              if (result) {
+                let repositoryEngagement = undefined
+                if (repositoryEngagementUsers && result.status === "valid") {
+                  const engagementUser = repositoryEngagementUsers.find(
+                    (u) => u.username.toLowerCase() === user.username?.toLowerCase(),
+                  )
+                  if (engagementUser) {
+                    repositoryEngagement = {
+                      hasStarred: engagementUser.hasStarred,
+                      hasFork: engagementUser.hasForked,
+                      repositoryUrl: trimmedRepositoryUrl,
                     }
                   }
-                  return user
-                }),
-              )
-
-              if (i < chunks.length - 1) {
-                const delay = 10000
-                await new Promise((resolve) => setTimeout(resolve, delay))
-              }
-            } catch (chunkError) {
-              if (chunkError instanceof Error && chunkError.name === "AbortError") {
-                throw chunkError
-              }
-
-              const errorResults = chunk.map((username) => ({
-                username,
-                status: "error" as const,
-                error: chunkError instanceof Error ? chunkError.message : "Processing failed",
-              }))
-              allResults.push(...errorResults)
-            }
-          }
-
-          if (repositoryUrl.trim()) {
-            const validUsernames = allResults.filter((r: any) => r.status === "valid").map((r: any) => r.username)
-
-            if (validUsernames.length > 0) {
-              try {
-                console.log("Starting repository engagement check for sequential validation...")
-                const repoRequestBody = {
-                  repositoryUrl: repositoryUrl.trim(),
-                  usernames: validUsernames,
-                  githubToken: githubToken.trim() || undefined,
                 }
-                console.log("Repository request body:", {
-                  repositoryUrl: repoRequestBody.repositoryUrl,
-                  usernamesCount: repoRequestBody.usernames.length,
-                  hasToken: !!repoRequestBody.githubToken,
-                  sampleUsernames: repoRequestBody.usernames.slice(0, 3),
-                })
-
-                const repoResponse = await fetch("/api/check-repository-engagement", {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                  },
-                  body: JSON.stringify(repoRequestBody),
-                  signal: controller.signal,
-                })
-
-                if (repoResponse.ok) {
-                  const repositoryEngagementData = await repoResponse.json()
-                  console.log(
-                    "Repository engagement data for sequential validation:",
-                    repositoryEngagementData.summary,
-                  )
-
-                  // Update users with repository engagement data
-                  setProcessedUsers((prev) =>
-                    prev.map((user) => {
-                      if (user.username && user.status === "valid") {
-                        const engagementUser = repositoryEngagementData.users.find(
-                          (u: any) => u.username.toLowerCase() === user.username?.toLowerCase(),
-                        )
-                        if (engagementUser) {
-                          return {
-                            ...user,
-                            repositoryEngagement: {
-                              hasStarred: engagementUser.hasStarred,
-                              hasFork: engagementUser.hasForked,
-                              repositoryUrl: repositoryUrl.trim(),
-                            },
-                          }
-                        }
-                      }
-                      return user
-                    }),
-                  )
-
-                  toast({
-                    title: "Repository Analysis Complete",
-                    description: `Found ${repositoryEngagementData.summary.starred} users who starred and ${repositoryEngagementData.summary.forked} who forked the repository.`,
-                  })
-                }
-              } catch (repoError) {
-                console.error("Repository engagement check failed in sequential validation:", repoError)
+                return { ...user, status: result.status, error: result.error, profileData: result.profileData, repositoryEngagement }
               }
             }
-          }
+            return user
+          }),
+        )
 
-          setValidationProgress(100)
-          setBatchProgress({ current: 0, total: 0 })
-
-          const validCount = allResults.filter((r: any) => r.status === "valid").length
-          const errorCount = allResults.filter((r: any) => r.status === "error").length
-
-          toast({
-            title: "Validation Complete",
-            description: `Processed ${allResults.length} usernames: ${validCount} valid, ${errorCount} errors`,
-          })
-        }
+        const validCount = allResults.filter((r: any) => r.status === "valid").length
+        const errorCount = allResults.filter((r: any) => r.status === "error").length
+        toast({
+          title: "Validation Complete",
+          description: `${allResults.length} processed: ${validCount} valid, ${errorCount} errors`,
+        })
 
         setEstimatedTime(null)
         setStartTime(null)
+        initialEstimatedTimeRef.current = 0
       } catch (error) {
         console.error("Validation error:", error)
         toast({
@@ -810,10 +691,11 @@ export default function GitHubValidator() {
         setIsPaused(false)
         setEstimatedTime(null)
         setStartTime(null)
+        initialEstimatedTimeRef.current = 0
         setBatchProgress({ current: 0, total: 0 })
       }
     },
-    [githubToken, isPaused, repositoryUrl, toast],
+    [engagementMode, fetchRepositoryEngagementData, githubToken, isPaused, repositoryUrl, toast],
   )
 
   const pauseValidation = useCallback(() => {
@@ -842,6 +724,7 @@ export default function GitHubValidator() {
     setBatchProgress({ current: 0, total: 0 })
     setEstimatedTime(null)
     setStartTime(null)
+    initialEstimatedTimeRef.current = 0
   }, [validationController])
 
   const handleDrop = useCallback(
@@ -943,9 +826,101 @@ export default function GitHubValidator() {
     }
   }, [processedUsers, validateSpecificUsernames, toast])
 
+  const rerunRepositoryEngagement = useCallback(
+    async (targetUsernames?: string[]) => {
+      const trimmedRepositoryUrl = repositoryUrl.trim()
+      if (!trimmedRepositoryUrl) {
+        toast({
+          title: "Repository URL required",
+          description: "Please provide a repository URL before re-running engagement checks.",
+          variant: "destructive",
+        })
+        return
+      }
+
+      const fallbackTargets = targetUsernames?.length
+        ? targetUsernames
+        : processedUsers.filter((user) => user.status === "valid" && user.username).map((user) => user.username!)
+
+      const uniqueTargets: string[] = []
+      const seen = new Set<string>()
+      fallbackTargets.forEach((username) => {
+        if (!username) return
+        const key = username.toLowerCase()
+        if (!seen.has(key)) {
+          seen.add(key)
+          uniqueTargets.push(username)
+        }
+      })
+
+      if (uniqueTargets.length === 0) {
+        toast({
+          title: "No users to refresh",
+          description: "There are no valid usernames available for a repository re-check.",
+        })
+        return
+      }
+
+      setIsRecheckingEngagement(true)
+      try {
+        const engagementUsers = await fetchRepositoryEngagementData({
+          usernames: uniqueTargets,
+          repositoryUrl: trimmedRepositoryUrl,
+          mode: engagementMode,
+        })
+
+        if (!engagementUsers || engagementUsers.length === 0) {
+          toast({
+            title: "No engagement updates",
+            description: "The re-run completed but no engagement data was returned.",
+          })
+          return
+        }
+
+        setProcessedUsers((prev) => {
+          const updated = prev.map((user) => {
+            if (!user.username) return user
+            const engagementUser = engagementUsers.find(
+              (engagement) => engagement.username.toLowerCase() === user.username?.toLowerCase(),
+            )
+            if (!engagementUser) return user
+
+            // Create new object to ensure React detects the change
+            return {
+              ...user,
+              repositoryEngagement: {
+                hasStarred: engagementUser.hasStarred,
+                hasFork: engagementUser.hasForked,
+                repositoryUrl: trimmedRepositoryUrl,
+              },
+            }
+          })
+          return updated
+        })
+
+        const starredCount = engagementUsers.filter((u) => u.hasStarred).length
+        const forkedCount = engagementUsers.filter((u) => u.hasForked).length
+        toast({
+          title: "Repository engagement refreshed",
+          description: `Re-checked ${engagementUsers.length} users: ${starredCount} starred, ${forkedCount} forked.`,
+        })
+      } catch (error) {
+        console.error("Repository engagement re-run failed", error)
+        toast({
+          title: "Re-run failed",
+          description: error instanceof Error ? error.message : "Unable to refresh repository engagement.",
+          variant: "destructive",
+        })
+      } finally {
+        setIsRecheckingEngagement(false)
+      }
+    },
+    [engagementMode, fetchRepositoryEngagementData, processedUsers, repositoryUrl, toast],
+  )
+
   return (
-    <div className="min-h-screen bg-background p-3 sm:p-6">
-      <div className="max-w-6xl mx-auto space-y-4 sm:space-y-6">
+    <div className="min-h-screen bg-background">
+      <div className="mx-auto max-w-5xl px-4 pb-16 sm:px-6 space-y-6">
         <AppHeader />
 
         <GitHubAuthSection
@@ -953,6 +928,8 @@ export default function GitHubValidator() {
           setGithubToken={setGithubToken}
           repositoryUrl={repositoryUrl}
           setRepositoryUrl={setRepositoryUrl}
+          engagementMode={engagementMode}
+          setEngagementMode={setEngagementMode}
           rateLimitInfo={rateLimitInfo}
           cacheStats={cacheStats}
           validationMethod={validationMethod}
@@ -988,6 +965,9 @@ export default function GitHubValidator() {
           onCancel={cancelValidation}
           estimatedTime={estimatedTime}
           onRetryFailed={retryFailedUsernames}
+          onRecheckEngagement={rerunRepositoryEngagement}
+          isRecheckingEngagement={isRecheckingEngagement}
+          repositoryUrl={repositoryUrl.trim() || undefined}
         />
       </div>
     </div>

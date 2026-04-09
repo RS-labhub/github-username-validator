@@ -43,15 +43,13 @@ function checkRateLimit(ip: string): { allowed: boolean; remaining: number; rese
 
 async function validateGitHubUsername(username: string, githubToken?: string): Promise<ValidationResult> {
   try {
-    await new Promise((resolve) => setTimeout(resolve, 2500))
-
     const headers: Record<string, string> = {
       "User-Agent": "GitHub-Username-Validator",
       Accept: "application/vnd.github.v3+json",
     }
 
     if (githubToken) {
-      headers.Authorization = `token ${githubToken}`
+      headers.Authorization = `Bearer ${githubToken}`
     }
 
     const response = await fetch(`https://api.github.com/users/${username}`, {
